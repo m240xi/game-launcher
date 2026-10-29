@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hate.bio Launcher",
+  "version": "0.1.0",
+  "identifier": "com.librelauncher.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "title": "Hate.bio Launcher",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 860,
+        "minHeight": 540,
+        "decorations": false,
+        "shadow": true,
+        "resizable": true,
+        "theme": "Dark",
+        "backgroundColor": "#09090b"
+      }
+    ],
+    "security": { "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "category": "Game",
+    "shortDescription": "DRM-free game launcher",
+    "longDescription": "Scan folders for game executables, show their icons, and launch them with one click. No DRM, no accounts.",
+    "windows": {
+      "nsis": { "installMode": "currentUser" }
+    }
+  }
+}
