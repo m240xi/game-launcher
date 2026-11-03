@@ -4,6 +4,8 @@ import { Icon } from "./icons";
 
 const inTauri = () => "__TAURI_INTERNALS__" in window;
 
+export type AppTab = "library" | "store";
+
 const winProps = {
   width: 10,
   height: 10,
@@ -13,7 +15,7 @@ const winProps = {
   fill: "none",
 } as const;
 
-export default function TitleBar() {
+export default function TitleBar({ tab, onTab }: { tab: AppTab; onTab: (tab: AppTab) => void }) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -43,16 +45,26 @@ export default function TitleBar() {
   };
 
   return (
-    <header className="titlebar" data-tauri-drag-region>
+    <header className="titlebar">
       <div className="tb-brand" data-tauri-drag-region>
         <span className="tb-mark" data-tauri-drag-region>
-          <Icon name="play" size={9} fill />
+          <Icon name="play" size={10} fill />
         </span>
-        <span className="tb-title" data-tauri-drag-region>
-          Hate.bio <span data-tauri-drag-region>Launcher</span>
+        <span className="tb-word" data-tauri-drag-region>
+          Hate.bio<i>Launcher</i>
         </span>
       </div>
-      <div className="tb-spacer" data-tauri-drag-region />
+
+      <nav className="tb-nav" aria-label="Primary">
+        <button className={tab === "library" ? "tb-tab on" : "tb-tab"} onClick={() => onTab("library")}>
+          Library
+        </button>
+        <button className={tab === "store" ? "tb-tab on" : "tb-tab"} onClick={() => onTab("store")}>
+          Store
+        </button>
+      </nav>
+
+      <div className="tb-fill" data-tauri-drag-region />
 
       <button className="tb-btn" title="Minimize" aria-label="Minimize" onClick={minimize}>
         <svg {...winProps} shapeRendering="crispEdges">

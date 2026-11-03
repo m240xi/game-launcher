@@ -25,7 +25,7 @@
         "backgroundColor": "#09090b"
       }
     ],
-    "security": { "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'" }
+    "security": { "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost https://shared.akamai.steamstatic.com https://cdn.akamai.steamstatic.com https://store.cloudflare.steamstatic.com; style-src 'self' 'unsafe-inline'; script-src 'self'" }
   },
   "bundle": {
     "active": true,

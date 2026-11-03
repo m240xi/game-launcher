@@ -3,9 +3,25 @@ import type { CSSProperties } from "react";
 export type IconName =
   | "play" | "grid" | "list" | "search" | "star" | "clock" | "library"
   | "folder" | "plus" | "refresh" | "x" | "external" | "pencil" | "trash"
-  | "chevron-down" | "file" | "alert";
+  | "chevron-down" | "chevron-left" | "chevron-right" | "file" | "alert" | "info"
+  | "store" | "download" | "check" | "package" | "magnet";
 
 const PATHS: Record<IconName, React.ReactNode> = {
+  store: (
+    <>
+      <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z" />
+      <path d="M3 6h18" />
+      <path d="M16 10a4 4 0 0 1-8 0" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" x2="12" y1="15" y2="3" />
+    </>
+  ),
+  check: <polyline points="20 6 9 17 4 12" />,
   play: <polygon points="6 3 20 12 6 21 6 3" />,
   grid: (
     <>
@@ -95,6 +111,15 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   "chevron-down": <path d="m6 9 6 6 6-6" />,
+  "chevron-left": <path d="m15 18-6-6 6-6" />,
+  "chevron-right": <path d="m9 18 6-6-6-6" />,
+  info: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </>
+  ),
   file: (
     <>
       <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
@@ -102,6 +127,21 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M10 9H8" />
       <path d="M16 13H8" />
       <path d="M16 17H8" />
+    </>
+  ),
+  package: (
+    <>
+      <path d="m7.5 4.27 9 5.15" />
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+      <path d="m3.3 7 8.7 5 8.7-5" />
+      <path d="M12 22V12" />
+    </>
+  ),
+  magnet: (
+    <>
+      <path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15" />
+      <path d="m5 8 4 4" />
+      <path d="m12 15 4 4" />
     </>
   ),
   alert: (

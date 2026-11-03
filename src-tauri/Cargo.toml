@@ -2,7 +2,7 @@
 name = "libre-launcher"
 version = "0.1.0"
 description = "DRM-free game launcher"
-authors = ["Hate.bio Launcher"]
+authors = ["Hate.bio"]
 edition = "2021"
 
 [lib]
@@ -19,14 +19,28 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"
 base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "native-tls"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+dirs = "5"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] , optional = true }
+librqbit = { version = "9.1", optional = true }
+unrar = "0.5.8"
+sevenz-rust = { version = "0.6.1", features = ["aes256"] }
+discord-rich-presence = "1.1.0"
+
+[features]
+default = []
+torrent = ["tokio", "dep:librqbit"]
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
   "Win32_Graphics_Gdi",
   "Win32_Storage_FileSystem",
+  "Win32_System_LibraryLoader",
 ] }
 
 [profile.release]
