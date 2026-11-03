@@ -516,6 +516,44 @@ enum DownloadError {
     Other(String),
 }
 
+fn parse_content_range_total(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if !value.starts_with("bytes") {
+        return None;
+    }
+    let total = value.rsplit('/').next()?.trim();
+    if total == "*" {
+        return None;
+    }
+    total.parse().ok()
+}
+
+fn probe_total(url: &str) -> Option<u64> {
+    let result = (|| {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent(UA)
+            .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
+            .ok()?;
+        let resp = client.get(url).header(reqwest::header::RANGE, "bytes=0-0").send().ok()?;
+        let status = resp.status().as_u16();
+        let total = if status == 206 {
+            resp.headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_content_range_total)
+        } else if status == 200 {
+            resp.content_length()
+        } else {
+            None
+        };
+        Some((status, total))
+    })();
+    crate::dlog!("[store] probe_total {} -> {:?}", &url[..url.len().min(60)], result);
+    result.and_then(|(_, t)| t)
+}
+
 fn download_file(
     app: &AppHandle,
     gid: &str,
@@ -523,21 +561,28 @@ fn download_file(
     dest: &Path,
     cancel: &AtomicBool,
     resolver: &dyn Fn() -> Result<String, String>,
+    fallback_total: Option<u64>,
 ) -> Result<(), String> {
     let mut current_url = url.to_string();
     let mut transient_attempts = 0usize;
     let mut resolve_attempts = 0usize;
     let mut restart_pending = false;
+    let mut probed_url = String::new();
+    let mut probed: Option<u64> = None;
     loop {
         if !is_web_url(&current_url) {
             return Err("The download link was invalid. Try again.".into());
+        }
+        if probed_url != current_url {
+            probed = probe_total(&current_url);
+            probed_url = current_url.clone();
         }
         if restart_pending {
             let _ = std::fs::remove_file(dest);
             restart_pending = false;
         }
         let resume = std::fs::metadata(dest).map(|m| m.len() > 0).unwrap_or(false);
-        match download_file_once(app, gid, &current_url, dest, cancel, resume) {
+        match download_file_once(app, gid, &current_url, dest, cancel, resume, probed.or(fallback_total)) {
             Ok(()) => return Ok(()),
             Err(DownloadError::Canceled) => return Err("Canceled".into()),
             Err(DownloadError::Transient(code)) => {
@@ -588,6 +633,7 @@ fn download_file_once(
     dest: &Path,
     cancel: &AtomicBool,
     resume: bool,
+    total: Option<u64>,
 ) -> Result<(), DownloadError> {
     let Some(curl_path) = std::env::var_os("SystemRoot")
         .map(|r| std::path::PathBuf::from(r).join("System32\\curl.exe"))
@@ -683,7 +729,7 @@ fn download_file_once(
                     game_id: gid.into(),
                     phase: "downloading".into(),
                     downloaded: Some(downloaded),
-                    total: None,
+                    total: total.map(|t| t.max(downloaded)),
                     bps: Some(bps),
                     error: None,
                 });
@@ -693,31 +739,21 @@ fn download_file_once(
     }
 }
 
-fn extract_zip(app: &AppHandle, gid: &str, zip_path: &Path, root: &Path, cancel: &AtomicBool) -> Result<(), String> {
-    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
-    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
-        .map_err(|e| format!("Corrupt archive: {e}"))?;
-
-    let total: u64 = (0..archive.len())
-        .map(|i| archive.by_index(i).map(|e| e.size()).unwrap_or(0))
-        .sum();
-    let mut done: u64 = 0;
-    let mut last_emit = Instant::now();
-
-    for i in 0..archive.len() {
-        if cancel.load(Ordering::Relaxed) {
-            return Err("Canceled".into());
+fn zip_err(e: &zip::result::ZipError) -> String {
+    match e {
+        zip::result::ZipError::UnsupportedArchive(detail) => format!(
+            "This archive uses a compression method the launcher can't unpack ({detail}). The download was kept — open the Store Games folder to extract it manually."
+        ),
+        zip::result::ZipError::InvalidPassword => {
+            "This archive is password-protected and can't be unpacked automatically. The download was kept — extract it manually.".into()
         }
-        let mut entry = archive.by_index(i).map_err(|e| format!("Corrupt archive: {e}"))?;
-        if entry.is_dir() { continue; }
-        let Some(rel) = entry.enclosed_name().map(|p| p.to_path_buf()) else { continue };
-        let out = root.join(&rel);
-        let Some(out_dir) = out.parent() else { continue };
-        if !out_dir.starts_with(root) { continue; }
-        std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
-        let mut writer = std::fs::File::create(&out).map_err(|e| e.to_string())?;
-        std::io::copy(&mut entry, &mut writer).map_err(|e| format!("Extraction interrupted: {e}"))?;
-        done += entry.size();
+        _ => format!("Corrupt archive: {e}"),
+    }
+}
+
+fn extract_zip(app: &AppHandle, gid: &str, zip_path: &Path, root: &Path, cancel: &AtomicBool) -> Result<(), String> {
+    let mut last_emit = Instant::now();
+    extract_zip_core(zip_path, root, cancel, |done, total| {
         if last_emit.elapsed().as_millis() >= EMIT_INTERVAL_MS {
             last_emit = Instant::now();
             emit(app, StoreEvent {
@@ -729,6 +765,39 @@ fn extract_zip(app: &AppHandle, gid: &str, zip_path: &Path, root: &Path, cancel:
                 error: None,
             });
         }
+    })
+}
+
+fn extract_zip_core(
+    zip_path: &Path,
+    root: &Path,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+        .map_err(|e| zip_err(&e))?;
+
+    let total: u64 = (0..archive.len())
+        .map(|i| archive.by_index(i).map(|e| e.size()).unwrap_or(0))
+        .sum();
+    let mut done: u64 = 0;
+
+    for i in 0..archive.len() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Canceled".into());
+        }
+        let mut entry = archive.by_index(i).map_err(|e| zip_err(&e))?;
+        if entry.is_dir() { continue; }
+        let Some(rel) = entry.enclosed_name().map(|p| p.to_path_buf()) else { continue };
+        let out = root.join(&rel);
+        let Some(out_dir) = out.parent() else { continue };
+        if !out_dir.starts_with(root) { continue; }
+        std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+        let mut writer = std::fs::File::create(&out).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut writer).map_err(|e| format!("Extraction interrupted: {e}"))?;
+        done += entry.size();
+        progress(done, total);
     }
     Ok(())
 }
@@ -813,6 +882,7 @@ pub async fn store_install(
     name: String,
     uri: String,
     ext: String,
+    size_bytes: Option<u64>,
 ) -> Result<(), String> {
     if is_magnet_uri(&uri) {
         {
@@ -891,7 +961,20 @@ pub async fn store_install(
 
     let root = store_root(&app)?;
     let game_dir = root.join(slugify(&name, &code));
-    let _ = std::fs::remove_dir_all(&game_dir);
+    let final_zip = game_dir.join(format!("{}.zip", safe_local_name(&fname)));
+    let have_zip = std::fs::metadata(&final_zip).map(|m| m.is_file() && m.len() > 0).unwrap_or(false);
+    if have_zip {
+        if let Ok(entries) = std::fs::read_dir(&game_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p == final_zip { continue; }
+                if p.is_dir() { let _ = std::fs::remove_dir_all(&p); }
+                else { let _ = std::fs::remove_file(&p); }
+            }
+        }
+    } else {
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
     if std::fs::create_dir_all(&game_dir).is_err() {
         return Err("Could not create the download folder. Check that the Documents folder is writable.".into());
     }
@@ -906,56 +989,58 @@ pub async fn store_install(
     let fname_t = fname.clone();
     let cancel_t = cancel.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        emit(&app_t, StoreEvent::phase(&gid_t, "resolving"));
-        let direct_url = match resolve_gate(&app_t, &code_t, &fname_t, &cancel_t) {
-            Ok(u) => {
-                crate::dlog!("[store] resolved direct link ({} chars)", u.len());
-                u
-            }
-            Err(e) if e == "Canceled" => {
-                clear_resolver(&app_t);
-                cleanup_target(&app_t, &game_dir);
-                emit(&app_t, StoreEvent::phase(&gid_t, "canceled"));
-                *app_t.state::<StoreState>().active.lock().unwrap() = None;
-                return;
-            }
-            Err(e) => {
-                clear_resolver(&app_t);
-                cleanup_target(&app_t, &game_dir);
-                emit(&app_t, StoreEvent {
-                    game_id: gid_t.clone(),
-                    phase: "error".into(),
-                    downloaded: None, total: None, bps: None,
-                    error: Some(e),
-                });
-                *app_t.state::<StoreState>().active.lock().unwrap() = None;
-                return;
-            }
-        };
-        clear_resolver(&app_t);
+        let final_zip = game_dir.join(format!("{}.zip", safe_local_name(&fname_t)));
+        if !have_zip {
+            emit(&app_t, StoreEvent::phase(&gid_t, "resolving"));
+            let direct_url = match resolve_gate(&app_t, &code_t, &fname_t, &cancel_t) {
+                Ok(u) => {
+                    crate::dlog!("[store] resolved direct link ({} chars)", u.len());
+                    u
+                }
+                Err(e) if e == "Canceled" => {
+                    clear_resolver(&app_t);
+                    cleanup_target(&app_t, &game_dir);
+                    emit(&app_t, StoreEvent::phase(&gid_t, "canceled"));
+                    *app_t.state::<StoreState>().active.lock().unwrap() = None;
+                    return;
+                }
+                Err(e) => {
+                    clear_resolver(&app_t);
+                    cleanup_target(&app_t, &game_dir);
+                    emit(&app_t, StoreEvent {
+                        game_id: gid_t.clone(),
+                        phase: "error".into(),
+                        downloaded: None, total: None, bps: None,
+                        error: Some(e),
+                    });
+                    *app_t.state::<StoreState>().active.lock().unwrap() = None;
+                    return;
+                }
+            };
+            clear_resolver(&app_t);
 
-        let zip_path = game_dir.join(format!("{}.part", safe_local_name(&fname_t)));
-        emit(&app_t, StoreEvent::phase(&gid_t, "downloading"));
-        let resolver = || resolve_gate(&app_t, &code_t, &fname_t, &cancel_t);
-        if let Err(e) = download_file(&app_t, &gid_t, &direct_url, &zip_path, &cancel_t, &resolver) {
-            crate::dlog!("[store] download failed for {} , status-err: {}", gid_t, e);
-            if e == "Canceled" {
-                cleanup_target(&app_t, &game_dir);
-                emit(&app_t, StoreEvent::phase(&gid_t, "canceled"));
-            } else {
-                cleanup_target(&app_t, &zip_path);
-                emit(&app_t, StoreEvent { game_id: gid_t.clone(), phase: "error".into(), downloaded: None, total: None, bps: None, error: Some(e) });
+            let zip_path = game_dir.join(format!("{}.part", safe_local_name(&fname_t)));
+            emit(&app_t, StoreEvent::phase(&gid_t, "downloading"));
+            let resolver = || resolve_gate(&app_t, &code_t, &fname_t, &cancel_t);
+            if let Err(e) = download_file(&app_t, &gid_t, &direct_url, &zip_path, &cancel_t, &resolver, size_bytes) {
+                crate::dlog!("[store] download failed for {} , status-err: {}", gid_t, e);
+                if e == "Canceled" {
+                    cleanup_target(&app_t, &game_dir);
+                    emit(&app_t, StoreEvent::phase(&gid_t, "canceled"));
+                } else {
+                    cleanup_target(&app_t, &zip_path);
+                    emit(&app_t, StoreEvent { game_id: gid_t.clone(), phase: "error".into(), downloaded: None, total: None, bps: None, error: Some(e) });
+                }
+                *app_t.state::<StoreState>().active.lock().unwrap() = None;
+                return;
             }
-            *app_t.state::<StoreState>().active.lock().unwrap() = None;
-            return;
-        }
-        let final_zip = zip_path.with_extension("zip");
-        crate::dlog!("[store] download finished, renaming {:?} -> {:?}", zip_path, final_zip);
-        if let Err(e) = std::fs::rename(&zip_path, &final_zip) {
-            cleanup_target(&app_t, &game_dir);
-            emit(&app_t, StoreEvent { game_id: gid_t.clone(), phase: "error".into(), downloaded: None, total: None, bps: None, error: Some(format!("Could not finalize the download: {e}")) });
-            *app_t.state::<StoreState>().active.lock().unwrap() = None;
-            return;
+            crate::dlog!("[store] download finished, renaming {:?} -> {:?}", zip_path, final_zip);
+            if let Err(e) = std::fs::rename(&zip_path, &final_zip) {
+                cleanup_target(&app_t, &game_dir);
+                emit(&app_t, StoreEvent { game_id: gid_t.clone(), phase: "error".into(), downloaded: None, total: None, bps: None, error: Some(format!("Could not finalize the download: {e}")) });
+                *app_t.state::<StoreState>().active.lock().unwrap() = None;
+                return;
+            }
         }
 
         emit(&app_t, StoreEvent::phase(&gid_t, "extracting"));
@@ -967,7 +1052,6 @@ pub async fn store_install(
             } else {
                 emit(&app_t, StoreEvent { game_id: gid_t.clone(), phase: "error".into(), downloaded: None, total: None, bps: None, error: Some(e) });
             }
-            cleanup_target(&app_t, &final_zip);
             *app_t.state::<StoreState>().active.lock().unwrap() = None;
             return;
         }
@@ -1561,6 +1645,34 @@ mod tests {
         assert_eq!(safe_local_name("C:evil.zip"), "C_evil.zip");
         assert_eq!(safe_local_name("normal-Game_v1.2.zip"), "normal-Game_v1.2.zip");
         assert_eq!(safe_local_name(""), "download");
+    }
+
+    #[test]
+    fn non_deflate_zips_extract() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("ll-bz2-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let zip_path = root.join("pack.zip");
+        {
+            let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Bzip2);
+            w.start_file("Game/data.txt", opts).unwrap();
+            w.write_all(b"payload").unwrap();
+            w.finish().unwrap();
+        }
+        let mut cb = |_d: u64, _t: u64| {};
+        extract_zip_core(&zip_path, &root, &AtomicBool::new(false), &mut cb).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("Game/data.txt")).unwrap(), "payload");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn content_range_totals_parse() {
+        assert_eq!(parse_content_range_total("bytes 0-0/70549012345"), Some(70549012345));
+        assert_eq!(parse_content_range_total("bytes 0-0/*"), None);
+        assert_eq!(parse_content_range_total("garbage"), None);
     }
 
     #[test]

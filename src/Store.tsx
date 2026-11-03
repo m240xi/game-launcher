@@ -246,6 +246,14 @@ function fmtSpeed(bps: number) {
   return `${(bps / 1e3).toFixed(0)} KB/s`;
 }
 
+function fmtEta(seconds: number) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
 const PHASE_LABEL: Record<string, string> = {
   resolving: "Preparing link…",
   downloading: "Downloading",
@@ -377,7 +385,13 @@ export default function Store({
   const startInstall = async (g: StoreGame) => {
     setInstallError(null);
     try {
-      await invoke("store_install", { gameId: g.id, name: g.name, uri: g.uri, ext: g.ext });
+      await invoke("store_install", {
+        gameId: g.id,
+        name: g.name,
+        uri: g.uri,
+        ext: g.ext,
+        sizeBytes: g.size_mb > 0 ? Math.round(g.size_mb * 1048576) : null,
+      });
       setProgress((prev) => ({ ...prev, [g.id]: { game_id: g.id, phase: "resolving" } }));
     } catch (e) {
       setInstallError(String(e));
@@ -570,6 +584,10 @@ export default function Store({
               const magnet = isMagnet(g.uri);
               const installable = magnet || g.ext === "zip";
               const pct = p && p.downloaded != null && p.total ? Math.min(100, Math.round((p.downloaded / p.total) * 100)) : null;
+              const eta =
+                pct != null && p?.bps && p.total && p.downloaded != null
+                  ? fmtEta((p.total - p.downloaded) / p.bps)
+                  : null;
               const disabledButton = !installable || (busyId != null && busyId !== g.id);
               const buttonTitle = magnet
                 ? "Torrent install — downloads and unpacks fully in-app"
@@ -618,6 +636,7 @@ export default function Store({
                             <span>
                               {pct != null ? `${pct}%` : ""}
                               {p.bps ? ` · ${fmtSpeed(p.bps)}` : ""}
+                              {eta ? ` · ${eta} left` : ""}
                             </span>
                           )}
                         </div>
