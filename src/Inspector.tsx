@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Game } from "./types";
 import { Icon } from "./icons";
 import GameArt from "./GameArt";
-import { fmtAgo, fmtSize, sourceLabel } from "./format";
+import { fmtAgo, fmtPlaytime, fmtSize, sourceLabel } from "./format";
 
 interface Props {
   game: Game;
@@ -110,6 +110,10 @@ export default function Inspector({
             <div>
               <dt>Last played</dt>
               <dd>{fmtAgo(game.last_played)}</dd>
+            </div>
+            <div>
+              <dt>Playtime</dt>
+              <dd>{fmtPlaytime(game.playtime_secs)}</dd>
             </div>
             <div>
               <dt>Times played</dt>

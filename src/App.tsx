@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { DeliveryCounts, Game, Library, StoreDelivery } from "./types";
 import { Icon } from "./icons";
@@ -109,6 +110,14 @@ export default function App() {
       setSelected((current) => next.games.find((g) => g.id === current?.id) ?? current);
     }
   };
+
+  useEffect(() => {
+    if (!inTauri()) return;
+    const un = listen<Library>("library-changed", (e) => applyLib(e.payload));
+    return () => {
+      un.then((u) => u()).catch(() => {});
+    };
+  }, []);
 
   const refetchLibrary = useCallback(async (): Promise<Library | null> => {
     if (!inTauri()) return null;
@@ -248,7 +257,7 @@ export default function App() {
         : sort === "recent"
           ? (b.last_played ?? 0) - (a.last_played ?? 0)
           : sort === "played"
-            ? b.play_count - a.play_count
+            ? b.playtime_secs - a.playtime_secs || b.play_count - a.play_count
             : (b.size_bytes ?? 0) - (a.size_bytes ?? 0),
     );
     if (sort === "name") list.sort((a, b) => Number(b.favorite) - Number(a.favorite));
@@ -302,7 +311,7 @@ export default function App() {
           onRemoveFolder={async (folder) => applyLib(await call<Library>("remove_scan_folder", { folder }))}
         />
 
-        {tab === "store" ? (
+        <div style={{ display: tab !== "store" ? "none" : "contents" }}>
           <Store
             lib={lib}
             onLibrary={applyLib}
@@ -318,7 +327,8 @@ export default function App() {
             onSource={handleStoreSource}
             onCatalogMeta={handleCatalogMeta}
           />
-        ) : (
+        </div>
+        {tab === "library" && (
           <>
             <main className="stage">
               <header className="stage-head">

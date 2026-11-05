@@ -11,6 +11,7 @@ export interface Game {
   system: string | null;
   last_played: number | null;
   play_count: number;
+  playtime_secs: number;
   favorite: boolean;
   size_bytes: number | null;
   store_id: string | null;

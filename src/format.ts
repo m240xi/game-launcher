@@ -28,6 +28,13 @@ export function fmtPlays(count: number): string {
   return count === 1 ? "1 play" : `${count} plays`;
 }
 
+export function fmtPlaytime(secs: number): string {
+  if (secs <= 0) return "Never played";
+  if (secs < 60) return "Less than a minute";
+  if (secs < 3600) return `${Math.round(secs / 60)} min`;
+  return `${(secs / 3600).toFixed(1).replace(/\.0$/, "")} hrs`;
+}
+
 export function sourceLabel(source: Game["source"]): string {
   if (source === "scan") return "Folder scan";
   if (source === "store") return "Store install";
@@ -36,7 +43,7 @@ export function sourceLabel(source: Game["source"]): string {
 
 export function gameMeta(game: Game): string {
   const size = fmtSize(game.size_bytes);
-  const plays = fmtPlays(game.play_count);
+  const plays = game.playtime_secs > 0 ? fmtPlaytime(game.playtime_secs) : fmtPlays(game.play_count);
   if (size && plays) return `${size} · ${plays}`;
   return size || plays;
 }

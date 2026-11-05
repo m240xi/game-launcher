@@ -5,6 +5,7 @@ macro_rules! dlog {
 
 mod archives;
 mod catalog;
+mod playtime;
 mod presence;
 pub mod store;
 pub mod torrent;
@@ -41,6 +42,8 @@ pub struct Game {
     pub last_played: Option<u64>,
     #[serde(default)]
     pub play_count: u32,
+    #[serde(default)]
+    pub playtime_secs: u64,
     #[serde(default)]
     pub favorite: bool,
     #[serde(default)]
@@ -138,6 +141,7 @@ pub fn add_store_game(app: &AppHandle, exe: PathBuf, store_id: &str, display_nam
     game.store_id = Some(store_id.to_string());
     if let Some(old) = lib.games.iter().find(|g| g.id == id) {            game.favorite = old.favorite;
             game.play_count = old.play_count;
+            game.playtime_secs = old.playtime_secs;
             game.last_played = old.last_played;
             game.steam_app_id = old.steam_app_id;
             game.steam_art_checked_at = old.steam_art_checked_at;
@@ -334,6 +338,7 @@ fn game_from_path(path: &Path, source: &str, source_folder: Option<String>, exis
         system: None,
         last_played: existing.and_then(|g| g.last_played),
         play_count: existing.map(|g| g.play_count).unwrap_or(0),
+        playtime_secs: existing.map(|g| g.playtime_secs).unwrap_or(0),
         favorite: existing.map(|g| g.favorite).unwrap_or(false),
         size_bytes: std::fs::metadata(path).ok().map(|m| m.len()),
         store_id: existing.and_then(|g| g.store_id.clone()),
@@ -761,17 +766,6 @@ fn launch_game(app: AppHandle, state: State<AppState>, id: String, args: Option<
     if !exe.is_file() { return Err(format!("Executable no longer exists:\n{}", g.exe_path)); }
     let workdir = exe.parent().map(|p| p.to_path_buf()).unwrap_or_default();
 
-    if g.source == "store" {
-        if let Some(dir) = crate::store::store_game_dir(&app, &exe) {
-            if crate::store::nested_unpack_pending(&dir) {
-                let cancel = std::sync::atomic::AtomicBool::new(false);
-                if let Err(e) = crate::store::extract_archives_with_progress(&app, &g.id, &dir, &cancel) {
-                    crate::dlog!("[launch] nested unpack incomplete for {}: {}", g.name, e);
-                }
-            }
-        }
-    }
-
     let mut cmd = std::process::Command::new(&exe);
     cmd.current_dir(&workdir);
     #[cfg(windows)]
@@ -779,16 +773,16 @@ fn launch_game(app: AppHandle, state: State<AppState>, id: String, args: Option<
     if let Some(a) = args.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
         cmd.args(a.split_whitespace());
     }
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to launch {}: {e}", exe.display()))?;
+    let child = cmd.spawn().map_err(|e| format!("Failed to launch {}: {e}", exe.display()))?;
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     presence::set(presence::PresenceMsg::Playing { name: g.name.clone(), since });
-    std::thread::spawn(move || {
-        let started = std::time::Instant::now();
-        let _ = child.wait();
-        if started.elapsed() >= std::time::Duration::from_secs(90) {
-            presence::set(presence::PresenceMsg::Idle);
-        }
-    });
+
+    let (root, exact_exe) = {
+        let store_root = crate::store::store_game_dir(&app, &exe);
+        let root = store_root.unwrap_or_else(|| exe.parent().map(|p| p.to_path_buf()).unwrap_or_default());
+        if root.components().filter(|c| matches!(c, std::path::Component::Normal(_))).count() < 2 { (root.clone(), Some(exe.clone())) } else { (root, None) }
+    };
+    playtime::start_session(app.clone(), g.id.clone(), child, root, exact_exe);
 
     g.play_count += 1;
     g.last_played = Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));

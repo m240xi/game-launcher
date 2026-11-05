@@ -2,7 +2,7 @@ import type { MouseEvent } from "react";
 import type { Game } from "./types";
 import { Icon } from "./icons";
 import GameArt from "./GameArt";
-import { fmtAgo, fmtSize, gameMeta, sourceLabel } from "./format";
+import { fmtAgo, fmtPlaytime, fmtSize, gameMeta, sourceLabel } from "./format";
 
 interface Common {
   game: Game;
@@ -69,7 +69,10 @@ export function GameRow({ game, selected, onSelect, onPlay, onContextMenu }: Omi
           {game.favorite && <Icon name="star" size={11} fill />}
         </div>
       </div>
-      <div className="lrow-cell">{fmtAgo(game.last_played)}</div>
+      <div className="lrow-cell">
+        {fmtAgo(game.last_played)}
+        {game.playtime_secs > 0 ? ` · ${fmtPlaytime(game.playtime_secs)}` : ""}
+      </div>
       <div className="lrow-cell col-size">{game.size_bytes != null ? fmtSize(game.size_bytes) : "—"}</div>
       <div className="lrow-cell col-src">{sourceLabel(game.source)}</div>
       <div className="lrow-act">

@@ -826,10 +826,6 @@ pub fn extract_archives_with_progress(
     crate::archives::extract_all(root, cancel, &mut progress)
 }
 
-pub fn nested_unpack_pending(dir: &Path) -> bool {
-    !dir.join(crate::archives::DONE_MARKER).exists() || crate::archives::has_archives(dir)
-}
-
 pub fn store_game_dir(app: &AppHandle, exe: &Path) -> Option<PathBuf> {
     let root = store_root(app).ok()?;
     let rel = exe.strip_prefix(&root).ok()?;
@@ -1055,10 +1051,10 @@ pub async fn store_install(
             *app_t.state::<StoreState>().active.lock().unwrap() = None;
             return;
         }
+        let _ = std::fs::remove_file(&final_zip);
         if let Err(e) = extract_archives_with_progress(&app_t, &gid_t, &game_dir, &cancel_t) {
             crate::dlog!("[store] nested extract incomplete for {}: {}", gid_t, e);
         }
-        let _ = std::fs::remove_file(&final_zip);
 
         emit(&app_t, StoreEvent::phase(&gid_t, "finishing"));
         let exe = match find_game_exe(&game_dir, &name_t) {
@@ -1105,7 +1101,7 @@ pub fn store_uninstall(app: AppHandle, store_id: String) -> Result<Option<crate:
     let app_state = app.state::<AppState>();
     let mut lib = app_state.lib.lock().unwrap();
     for g in lib.games.iter().filter(|g| g.store_id.as_deref() == Some(store_id.as_str())).cloned().collect::<Vec<_>>() {
-        let folder = PathBuf::from(&g.folder);
+        let folder = store_game_dir(&app, Path::new(&g.exe_path)).unwrap_or_else(|| PathBuf::from(&g.folder));
         let Ok(meta) = std::fs::symlink_metadata(&folder) else { continue };
         if meta.file_type().is_symlink() { continue; }
         let Ok(canon) = std::fs::canonicalize(&folder) else { continue };

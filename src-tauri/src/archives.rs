@@ -75,7 +75,7 @@ pub fn find_archives(root: &Path) -> Vec<Plan> {
     let mut singles: Vec<(PathBuf, Kind)> = Vec::new();
     let mut rar_sets: BTreeMap<String, Vec<(u32, PathBuf)>> = BTreeMap::new();
 
-    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(root).max_depth(2).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
             continue;
         }
